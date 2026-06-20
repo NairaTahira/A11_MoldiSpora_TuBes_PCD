@@ -13,6 +13,8 @@ import 'screens/scanner_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/info_screen.dart';
 import 'screens/settings_screen.dart';
+import 'services/connectivity_service.dart';
+import 'services/mongo_service.dart';
 
 final GetIt locator = GetIt.instance;
 
@@ -24,6 +26,10 @@ void main() async {
 
   await Hive.initFlutter();
   Hive.registerAdapter(DetectionResultAdapter());
+
+  try {
+    await Hive.deleteBoxFromDisk('scan_history');
+  } catch (_) {}
   await Hive.openBox<DetectionResult>('scan_history');
 
   locator.registerSingleton<HiveService>(HiveService());
@@ -32,7 +38,22 @@ void main() async {
 
   await locator<InferenceService>().init();
 
+  final connectivity = ConnectivityService();
+  connectivity.initialize();
+
   runApp(const MoldiSporaApp());
+
+  if (connectivity.isConnected.value) {
+    await MongoService.connect();
+    await locator<HiveService>().syncPendingResults();
+  }
+
+  connectivity.isConnected.addListener(() async {
+    if (connectivity.isConnected.value) {
+      await MongoService.connect();
+      locator<HiveService>().syncPendingResults();
+    }
+  });
 }
 
 class MoldiSporaApp extends StatelessWidget {
@@ -57,6 +78,10 @@ class MoldiSporaApp extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MainShell
+// ─────────────────────────────────────────────────────────────────────────────
+
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -66,26 +91,39 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _currentIndex = 0;
+  final _camera = GetIt.I<CameraService>();
+
+  // Scanner tab index
+  static const _scannerTab = 1;
 
   void _goToTab(int index) {
     if (index == _currentIndex) return;
+
+    // When LEAVING scanner tab, stop any active stream
+    if (_currentIndex == _scannerTab) {
+      _camera.stopImageStream();
+    }
+
+    // When ENTERING scanner tab, reinit camera so preview is fresh
+    if (index == _scannerTab) {
+      _camera.reinit(); // fire-and-forget; ScannerScreen also calls this in initState
+    }
+
     setState(() => _currentIndex = index);
   }
 
-  // Cannot use const List because DashboardScreen and SettingsScreen
-  // now take required callback parameters — use a getter instead.
   List<Widget> get _screens => [
-    DashboardScreen(
-      onGoToScanner: () => _goToTab(1), // "START AI DETECTION" button
-      onGoToHistory: () => _goToTab(2), // "HISTORY" label
-    ),
-    const ScannerScreen(),
-    const HistoryScreen(),
-    const InfoScreen(),
-    SettingsScreen(
-      onGoToScanner: () => _goToTab(1), // "Try it now" in How-to sheet
-    ),
-  ];
+        DashboardScreen(
+          onGoToScanner: () => _goToTab(1),
+          onGoToHistory: () => _goToTab(2),
+        ),
+        const ScannerScreen(),
+        const HistoryScreen(),
+        const InfoScreen(),
+        SettingsScreen(
+          onGoToScanner: () => _goToTab(1),
+        ),
+      ];
 
   @override
   Widget build(BuildContext context) {

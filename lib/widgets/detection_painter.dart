@@ -70,8 +70,8 @@ class DetectionPainter extends CustomPainter {
             debugPrint('   ✅ Bbox format: CORNER (pixel coords)');
           } else {
             // Center format (cx, cy, w, h) — original logic
-            final scaleX = size.width / 320;
-            final scaleY = size.height / 320;
+            final scaleX = size.width / 640;
+            final scaleY = size.height / 640;
 
             final x = (x1 - x2 / 2) * scaleX;
             final y = (y1 - y2 / 2) * scaleY;
@@ -149,16 +149,17 @@ class DetectionPainter extends CustomPainter {
   }
 
   Color _colorForLabel(String label) {
-    switch (label.toLowerCase()) {
-      case 'mold':
-        return const Color(0xFFFF4444);
-      case 'crack':
-        return const Color(0xFFFFAA00);
-      case 'peeling':
-        return const Color(0xFFFFDD00);
-      default:
-        return const Color(0xFF00C896);
+    final l = label.toLowerCase();
+    if (l.contains('stachybotrys') || l.contains('black')) {
+      return const Color(0xFFFF4444); // red
     }
+    if (l.contains('aspergillus') || l.contains('green')) {
+      return const Color(0xFF00C896); // green
+    }
+    if (l.contains('cladosporium') || l.contains('brown')) {
+      return const Color(0xFFFFAA00); // orange
+    }
+    return const Color(0xFF00C896);
   }
 
   @override

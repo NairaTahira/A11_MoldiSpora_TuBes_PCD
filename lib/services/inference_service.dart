@@ -5,43 +5,17 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image/image.dart' as img;
 
-// ← Import service PCD
 import 'image_processing_service.dart';
+import '../screens/scanner_screen.dart' show PcdSettings;
 
-// ✅ Import PcdSettings dari scanner_screen
-// (atau define di separate file untuk better organization)
-
-class PcdSettings {
-  final double sharpening;    // Laplacian strength [0.0, 1.0]
-  final double colorBoost;    // HSV boost [1.0, 2.0]
-  final double contrast;      // CLAHE clip limit [1.0, 5.0]
-  final double blur;          // Gaussian sigma [0.3, 2.0]
-
-  const PcdSettings({
-    this.sharpening = 0.5,
-    this.colorBoost = 1.4,
-    this.contrast = 2.5,
-    this.blur = 0.8,
-  });
-
-  Map<String, dynamic> toMap() {
-    return {
-      'sharpening': sharpening,
-      'colorBoost': colorBoost,
-      'contrast': contrast,
-      'blur': blur,
-    };
-  }
-
-  @override
-  String toString() =>
-      'PcdSettings(sharpening: $sharpening, colorBoost: $colorBoost, contrast: $contrast, blur: $blur)';
-}
+// PcdSettings lives in scanner_screen.dart — single source of truth.
+// Re-export it from here so other files don't need a direct import of scanner_screen.
+export '../screens/scanner_screen.dart' show PcdSettings;
 
 class InferenceResult {
   final String label;
   final double confidence;
-  final List<double> bbox; // [cx, cy, w, h] in model coords (0–320)
+  final List<double> bbox; // [cx, cy, w, h] in model coords (0–640)
 
   InferenceResult({
     required this.label,
@@ -64,15 +38,13 @@ class InferenceService {
   List<String> _classNames = [];
   bool _isReady = false;
 
-  static const int inputSize = 320;
+  static const int inputSize = 640;
 
   double get confidenceThreshold =>
       double.tryParse(dotenv.env['CONFIDENCE_THRESHOLD'] ?? '0.4') ?? 0.4;
 
   bool get isReady => _isReady;
   List<String> get classNames => _classNames;
-
-  // ── Init ─────────────────────────────────────────────────────────────────────
 
   Future<void> init() async {
     try {
@@ -86,7 +58,7 @@ class InferenceService {
       debugPrint('✅ Labels loaded: $_classNames');
 
       final modelPath =
-          dotenv.env['MODEL_PATH'] ?? 'assets/models/best_int8.tflite';
+          dotenv.env['MODEL_PATH'] ?? 'assets/models/best_int8_fixed.tflite';
       _interpreter = await Interpreter.fromAsset(modelPath);
       _isReady = true;
       debugPrint(
@@ -97,34 +69,21 @@ class InferenceService {
     }
   }
 
-  // ── Public API ────────────────────────────────────────────────────────────────
-
-  /// Jalankan PCD pipeline dengan settings lalu inference pada [image].
-  ///
-  /// Pipeline:
-  ///   Laplacian Sharpening → HSV Mold Boost → Adaptive Contrast
-  ///   → Gaussian Blur → Normalize → YOLOv8
-  ///
-  /// ✅ NEW: [pcdSettings] parameter untuk customize pipeline
   Future<List<InferenceResult>> runOnImage(
     img.Image image, {
-    PcdSettings pcdSettings = const PcdSettings(), // ✅ NEW: Default settings
+    PcdSettings pcdSettings = const PcdSettings(),
   }) async {
     if (!_isReady || _interpreter == null) return [];
 
-    // Pastikan input sudah 320×320
     final resized = (image.width != inputSize || image.height != inputSize)
         ? img.copyResize(image, width: inputSize, height: inputSize)
         : image;
 
-    // ✅ MODIFIED: Pass PCD settings ke image processing
     final input =
         await ImageProcessingService.processForInference(resized, pcdSettings);
 
     return _runInterpreter(input);
   }
-
-  // ── Core inference ────────────────────────────────────────────────────────────
 
   List<InferenceResult> _runInterpreter(
       List<List<List<List<double>>>> input) {
@@ -133,15 +92,15 @@ class InferenceService {
 
     final output = List.generate(
       1,
-      (_) => List.generate(numRows, (_) => List<double>.filled(2100, 0.0)),
+      (_) => List.generate(numRows, (_) => List<double>.filled(8400, 0.0)),
     );
 
     _interpreter!.run(input, output);
 
-    final predictions = output[0]; // [numRows, 2100]
+    final predictions = output[0]; // [numRows, 8400]
     final results = <InferenceResult>[];
 
-    for (int i = 0; i < 2100; i++) {
+    for (int i = 0; i < 8400; i++) {
       final cx = predictions[0][i];
       final cy = predictions[1][i];
       final bw = predictions[2][i];
@@ -169,8 +128,6 @@ class InferenceService {
     results.sort((a, b) => b.confidence.compareTo(a.confidence));
     return _nms(results, iouThreshold: 0.45).take(10).toList();
   }
-
-  // ── NMS ──────────────────────────────────────────────────────────────────────
 
   List<InferenceResult> _nms(List<InferenceResult> results,
       {double iouThreshold = 0.45}) {
@@ -215,8 +172,6 @@ class InferenceService {
     final bArea = b[2] * b[3];
     return interArea / (aArea + bArea - interArea);
   }
-
-  // ── Cleanup ───────────────────────────────────────────────────────────────────
 
   void dispose() {
     _interpreter?.close();

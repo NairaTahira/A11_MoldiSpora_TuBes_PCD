@@ -1,4 +1,3 @@
-crack
-mold
-peeling
-stain
+Aspergillus_Green_Mold
+Cladosporium_White_Brown
+Stachybotrys_Black_Mold

@@ -12,16 +12,19 @@ class DetectionResult extends HiveObject {
   final double confidence;
 
   @HiveField(3)
-  final String label; // 'mold', 'crack', 'peeling', etc.
+  final String label;
 
   @HiveField(4)
   final String? imagePath;
 
   @HiveField(5)
-  final String location; // e.g. "Kamar Kos", user-input
+  final String location;
 
   @HiveField(6)
-  final String riskLevel; // 'low', 'medium', 'high', 'danger'
+  final String riskLevel;
+
+  @HiveField(7)
+  bool synced;
 
   DetectionResult({
     required this.id,
@@ -31,6 +34,7 @@ class DetectionResult extends HiveObject {
     this.imagePath,
     required this.location,
     required this.riskLevel,
+    this.synced = false,
   });
 
   String get formattedDate {
@@ -44,7 +48,6 @@ class DetectionResult extends HiveObject {
   int get confidencePercent => (confidence * 100).round();
 }
 
-// ── Manual adapter (avoids build_runner requirement) ──────────────────────────
 class DetectionResultAdapter extends TypeAdapter<DetectionResult> {
   @override
   final int typeId = 0;
@@ -59,6 +62,7 @@ class DetectionResultAdapter extends TypeAdapter<DetectionResult> {
       imagePath: reader.read() as String?,
       location: reader.readString(),
       riskLevel: reader.readString(),
+      synced: reader.readBool(),
     );
   }
 
@@ -71,5 +75,6 @@ class DetectionResultAdapter extends TypeAdapter<DetectionResult> {
     writer.write(obj.imagePath);
     writer.writeString(obj.location);
     writer.writeString(obj.riskLevel);
+    writer.writeBool(obj.synced);
   }
 }
