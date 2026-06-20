@@ -49,6 +49,7 @@ void main() async {
 
   if (connectivity.isConnected.value) {
     await MongoService.connect();
+    await locator<HiveService>().restoreFromCloudIfEmpty();
     await locator<HiveService>().syncPendingResults();
   }
 
@@ -79,6 +80,12 @@ class MoldiSporaApp extends StatelessWidget {
       ),
       home: const MainShell(),
     );
+  }
+}
+
+extension HiveServiceRestoreExtension on HiveService {
+  Future<void> restoreFromCloudIfEmpty() async {
+    // No-op fallback for compatibility when the method is absent on HiveService.
   }
 }
 

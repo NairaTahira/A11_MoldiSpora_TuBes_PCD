@@ -56,6 +56,145 @@ class ImageProcessingService {
     return result;
   }
 
+  /// YUV camera frame + full PCD pipeline in one single isolate to minimize lag.
+  static Future<List<List<List<List<double>>>>> processCameraFrameForInference({
+    required int width,
+    required int height,
+    required int targetSize,
+    required Uint8List yPlane,
+    required Uint8List uPlane,
+    required Uint8List vPlane,
+    required int uvRowStride,
+    required int uvPixelStride,
+    required int sensorOrientation,
+    required PcdSettings pcdSettings,
+  }) async {
+    return await compute(_cameraFramePipelineIsolate, {
+      'width': width,
+      'height': height,
+      'targetSize': targetSize,
+      'yPlane': yPlane,
+      'uPlane': uPlane,
+      'vPlane': vPlane,
+      'uvRowStride': uvRowStride,
+      'uvPixelStride': uvPixelStride,
+      'sensorOrientation': sensorOrientation,
+      'sharpening': pcdSettings.sharpening,
+      'colorBoost': pcdSettings.colorBoost,
+      'contrast': pcdSettings.contrast,
+      'blur': pcdSettings.blur,
+    });
+  }
+
+  static List<List<List<List<double>>>> _cameraFramePipelineIsolate(
+      Map<String, dynamic> args) {
+    final int width = args['width'];
+    final int height = args['height'];
+    final int target = args['targetSize'];
+    final Uint8List yPlane = args['yPlane'];
+    final Uint8List uPlane = args['uPlane'];
+    final Uint8List vPlane = args['vPlane'];
+    final int uvRowStride = args['uvRowStride'];
+    final int uvPixelStride = args['uvPixelStride'];
+    final int sensorOrientation = args['sensorOrientation'];
+
+    final double sharpening = args['sharpening'] ?? 0.5;
+    final double colorBoost = args['colorBoost'] ?? 1.4;
+    final double contrast = args['contrast'] ?? 2.5;
+    final double blur = args['blur'] ?? 0.8;
+
+    final pixels = _yuvToDoublePixels(
+      width: width,
+      height: height,
+      target: target,
+      yPlane: yPlane,
+      uPlane: uPlane,
+      vPlane: vPlane,
+      uvRowStride: uvRowStride,
+      uvPixelStride: uvPixelStride,
+      sensorOrientation: sensorOrientation,
+    );
+
+    var processed = _laplacianSharpening(pixels, target, target, strength: sharpening);
+    processed = _hsvMoldBoost(processed, target, target, colorBoost: colorBoost);
+    processed = _adaptiveContrast(processed, target, target, tileSize: 8, clipLimit: contrast);
+    processed = _gaussianBlur3x3(processed, target, target, sigma: blur);
+
+    return _toModelInput(processed, target, target);
+  }
+
+  static List<List<List<double>>> _yuvToDoublePixels({
+    required int width,
+    required int height,
+    required int target,
+    required Uint8List yPlane,
+    required Uint8List uPlane,
+    required Uint8List vPlane,
+    required int uvRowStride,
+    required int uvPixelStride,
+    required int sensorOrientation,
+  }) {
+    final pixels = List.generate(
+      target,
+      (_) => List.generate(target, (_) => List<double>.filled(3, 0.0)),
+    );
+
+    final bool isRotated = sensorOrientation == 90 || sensorOrientation == 270;
+    final double xStep = (isRotated ? height : width) / target;
+    final double yStep = (isRotated ? width : height) / target;
+
+    debugPrint('🔍 sensorOrientation=$sensorOrientation, srcW=$width, srcH=$height, '
+    'xStep=${(isRotated ? height : width) / target}, '
+    'yStep=${(isRotated ? width : height) / target}');
+
+    for (int ty = 0; ty < target; ty++) {
+      for (int tx = 0; tx < target; tx++) {
+        int srcX = 0;
+        int srcY = 0;
+
+        if (sensorOrientation == 90) {
+          // Counteract 90 deg sensor tilt -> rotate 270 deg clockwise (90 deg counter-clockwise)
+          srcX = ((target - 1 - ty) * xStep).floor().clamp(0, width - 1);
+          srcY = (tx * yStep).floor().clamp(0, height - 1);
+        } else if (sensorOrientation == 270) {
+          // Counteract 270 deg sensor tilt -> rotate 90 deg clockwise
+          srcX = (ty * xStep).floor().clamp(0, width - 1);
+          srcY = ((target - 1 - tx) * yStep).floor().clamp(0, height - 1);
+        } else if (sensorOrientation == 180) {
+          srcX = ((target - 1 - tx) * xStep).floor().clamp(0, width - 1);
+          srcY = ((target - 1 - ty) * yStep).floor().clamp(0, height - 1);
+        } else {
+          srcX = (tx * xStep).floor().clamp(0, width - 1);
+          srcY = (ty * yStep).floor().clamp(0, height - 1);
+        }
+
+        final int yVal = yPlane[srcY * width + srcX] & 0xFF;
+        final int uvIndex =
+            uvPixelStride * (srcX ~/ 2) + uvRowStride * (srcY ~/ 2);
+
+        double r, g, b;
+        if (uvIndex >= 0 && uvIndex < uPlane.length && uvIndex < vPlane.length) {
+          final int uVal = (uPlane[uvIndex] & 0xFF) - 128;
+          final int vVal = (vPlane[uvIndex] & 0xFF) - 128;
+
+          r = (yVal + 1.402 * vVal).clamp(0, 255).toDouble();
+          g = (yVal - 0.344136 * uVal - 0.714136 * vVal).clamp(0, 255).toDouble();
+          b = (yVal + 1.772 * uVal).clamp(0, 255).toDouble();
+        } else {
+          r = yVal.toDouble();
+          g = yVal.toDouble();
+          b = yVal.toDouble();
+        }
+
+        pixels[ty][tx][0] = r;
+        pixels[ty][tx][1] = g;
+        pixels[ty][tx][2] = b;
+      }
+    }
+
+    return pixels;
+  }
+
   // ── Isolate entry (top-level dipanggil compute) ──────────────────────────────
 
   static List<List<List<List<double>>>> _pipelineIsolate(
@@ -171,16 +310,19 @@ List<List<List<double>>> _hsvMoldBoost(
       double sat = hsv[1]; // 0–1
       double val = hsv[2]; // 0–1
 
-      // Deteksi zona warna jamur
-      final isMoldGreen = (hue >= 80 && hue <= 160) && sat >= 0.2 && val <= 0.55;
-      final isMoldBrown = (hue >= 15 && hue <= 45) && sat >= 0.15 && val <= 0.6;
-      final isMoldDark = val <= 0.2 && sat >= 0.1; // hitam/gelap pekat
+      // Deteksi zona warna jamur dengan range lebih lebar dan inklusif untuk live feed
+      final isMoldGreen = (hue >= 70 && hue <= 170) && sat >= 0.12 && val <= 0.7; 
+      final isMoldBrown = (hue >= 10 && hue <= 55) && sat >= 0.08 && val <= 0.8;  
+      final isMoldDark = val <= 0.25;                                              
+      final isMoldWhite = sat <= 0.15 && val >= 0.5;                               
 
-      if (isMoldGreen || isMoldBrown || isMoldDark) {
-        // ✅ MODIFIED: Use configurable colorBoost instead of hardcoded 1.4
-        sat = (sat * colorBoost).clamp(0.0, 1.0);
-        // Sedikit terangkan value supaya model bisa membaca tekstur
-        if (val < 0.15) val = (val + 0.08).clamp(0.0, 1.0);
+      if (isMoldGreen || isMoldBrown || isMoldDark || isMoldWhite) {
+        if (!isMoldWhite) {
+          // ✅ MODIFIED: Use configurable colorBoost instead of hardcoded 1.4
+          sat = (sat * colorBoost).clamp(0.0, 1.0);
+          // Sedikit terangkan value supaya model bisa membaca tekstur
+          if (val < 0.15) val = (val + 0.08).clamp(0.0, 1.0);
+        }
       } else {
         // Area non-jamur: sedikit desaturasi agar kontras terhadap jamur naik
         sat = (sat * 0.85).clamp(0.0, 1.0);

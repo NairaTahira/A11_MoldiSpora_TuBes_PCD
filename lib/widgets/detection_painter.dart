@@ -34,53 +34,27 @@ class DetectionPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2.5;
 
-        // ✅ FIX #1: Proper bbox format handling
-        // bbox format: [x1, y1, x2, y2] (top-left, bottom-right) OR [cx, cy, w, h] (center format)
-        // Let's handle both:
-
         late Rect rect;
 
         if (det.bbox.length == 4) {
-          final x1 = det.bbox[0];
-          final y1 = det.bbox[1];
-          final x2 = det.bbox[2];
-          final y2 = det.bbox[3];
+          final cx = det.bbox[0];
+          final cy = det.bbox[1];
+          final w = det.bbox[2];
+          final h = det.bbox[3];
 
-          // Check if it's center format (cx, cy, w, h) or corner format (x1, y1, x2, y2)
-          // If x2 > x1 and y2 > y1, it's corner format
-          // Otherwise assume center format
+          // Check if coordinates are normalized [0, 1] or in pixel space [0, 640]
+          final isNormalized = cx <= 1.5 && cy <= 1.5 && w <= 1.5 && h <= 1.5;
+          final scaleX = isNormalized ? size.width : size.width / 640;
+          final scaleY = isNormalized ? size.height : size.height / 640;
 
-          if (x2 > x1 && y2 > y1 && x2 < 1.5 && y2 < 1.5) {
-            // Corner format (x1, y1, x2, y2) — normalized [0, 1]
-            final x = x1 * size.width;
-            final y = y1 * size.height;
-            final w = (x2 - x1) * size.width;
-            final h = (y2 - y1) * size.height;
-            rect = Rect.fromLTWH(x, y, w, h);
+          final left = (cx - w / 2) * scaleX;
+          final top = (cy - h / 2) * scaleY;
+          final width = w * scaleX;
+          final height = h * scaleY;
 
-            debugPrint('   ✅ Bbox format: CORNER (x1, y1, x2, y2) normalized');
-          } else if (x1 > 1 && y1 > 1) {
-            // Corner format (x1, y1, x2, y2) — pixel coords
-            final x = x1;
-            final y = y1;
-            final w = x2 - x1;
-            final h = y2 - y1;
-            rect = Rect.fromLTWH(x, y, w, h);
+          rect = Rect.fromLTWH(left, top, width, height);
 
-            debugPrint('   ✅ Bbox format: CORNER (pixel coords)');
-          } else {
-            // Center format (cx, cy, w, h) — original logic
-            final scaleX = size.width / 640;
-            final scaleY = size.height / 640;
-
-            final x = (x1 - x2 / 2) * scaleX;
-            final y = (y1 - y2 / 2) * scaleY;
-            final w = x2 * scaleX;
-            final h = y2 * scaleY;
-            rect = Rect.fromLTWH(x, y, w, h);
-
-            debugPrint('   ✅ Bbox format: CENTER (cx, cy, w, h)');
-          }
+          debugPrint('   ✅ Bbox format: CENTER (${isNormalized ? "normalized" : "pixel coords"})');
         } else {
           debugPrint('   ⚠️  Unexpected bbox format: ${det.bbox.length} elements');
           continue;

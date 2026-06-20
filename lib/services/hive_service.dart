@@ -68,3 +68,36 @@ class HiveService {
     return 'High Risk – Act Now';
   }
 }
+
+Future<void> restoreFromCloudIfEmpty() async {
+  final box = Hive.box<DetectionResult>(HiveService._boxName);
+  if (box.isNotEmpty) {
+    debugPrint('ℹ️ Hive box already has data, skip restore.');
+    return;
+  }
+
+  final remoteResults = await MongoService.fetchAllResults();
+  if (remoteResults.isEmpty) {
+    debugPrint('ℹ️ No remote data to restore.');
+    return;
+  }
+
+  for (final doc in remoteResults) {
+    try {
+      final result = DetectionResult(
+        id: doc['_id'] as String,
+        timestamp: DateTime.parse(doc['timestamp'] as String),
+        confidence: (doc['confidence'] as num).toDouble(),
+        label: doc['label'] as String,
+        imagePath: doc['imagePath'] as String?,
+        location: doc['location'] as String? ?? 'Unknown',
+        riskLevel: doc['riskLevel'] as String,
+        synced: true, // already came from cloud, no need to re-upload
+      );
+      await box.put(result.id, result);
+    } catch (e) {
+      debugPrint('⚠️ Skipped one corrupted remote record: $e');
+    }
+  }
+  debugPrint('✅ Restored ${remoteResults.length} results from cloud to Hive.');
+}

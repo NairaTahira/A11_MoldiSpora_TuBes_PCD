@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
-import '../services/hive_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   /// Called when user taps "How to use" → opens scanner.
@@ -14,7 +13,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final _hive = GetIt.I<HiveService>();
   bool _pushNotifications = true;
   bool _edgeAiPrecision = true;
 

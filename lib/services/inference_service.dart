@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -82,6 +81,12 @@ class InferenceService {
     final input =
         await ImageProcessingService.processForInference(resized, pcdSettings);
 
+    return _runInterpreter(input);
+  }
+
+  Future<List<InferenceResult>> runOnProcessedInput(
+      List<List<List<List<double>>>> input) async {
+    if (!_isReady || _interpreter == null) return [];
     return _runInterpreter(input);
   }
 

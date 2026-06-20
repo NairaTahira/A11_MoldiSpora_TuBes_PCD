@@ -38,7 +38,7 @@ class CameraService {
   Future<void> _initController(CameraDescription camera) async {
     _controller = CameraController(
       camera,
-      ResolutionPreset.medium,
+      ResolutionPreset.high,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );

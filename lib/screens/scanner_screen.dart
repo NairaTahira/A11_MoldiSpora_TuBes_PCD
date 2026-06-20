@@ -1,7 +1,6 @@
-import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
 import 'package:get_it/get_it.dart';
@@ -10,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../services/camera_service.dart';
 import '../services/inference_service.dart';
+import '../services/image_processing_service.dart';
 import '../services/hive_service.dart';
 import '../models/detection_result.dart';
 import '../widgets/detection_painter.dart';
@@ -286,46 +286,42 @@ class _ScannerScreenState extends State<ScannerScreen>
     _isProcessing = true;
 
     try {
-      final rgbBytes = await compute(_yuv420ToRgbDownsampled, {
-        'width': frame.width,
-        'height': frame.height,
-        'targetSize': 640,
-        'yPlane': frame.planes[0].bytes,
-        'uPlane': frame.planes[1].bytes,
-        'vPlane': frame.planes[2].bytes,
-        'uvRowStride': frame.planes[1].bytesPerRow,
-        'uvPixelStride': frame.planes[1].bytesPerPixel ?? 1,
-      });
-
-      final image = img.Image.fromBytes(
-        width: 640,
-        height: 640,
-        bytes: rgbBytes.buffer,
-        format: img.Format.uint8,
-        numChannels: 3,
-      );
-
-      final results = await _inference.runOnImage(
-        image,
+      final input = await ImageProcessingService.processCameraFrameForInference(
+        width: frame.width,
+        height: frame.height,
+        targetSize: 640,
+        yPlane: frame.planes[0].bytes,
+        uPlane: frame.planes[1].bytes,
+        vPlane: frame.planes[2].bytes,
+        uvRowStride: frame.planes[1].bytesPerRow,
+        uvPixelStride: frame.planes[1].bytesPerPixel ?? 1,
+        sensorOrientation: _camera.controller?.description.sensorOrientation ?? 90,
         pcdSettings: _pcdSettingsNotifier.value,
       );
 
-      if (_isStreaming && mounted) {
-        final changed = results.length != _detectionNotifier.value.length ||
-            (results.isNotEmpty &&
-                (_detectionNotifier.value.isEmpty ||
-                    results.first.label !=
-                        _detectionNotifier.value.first.label));
+      final results = await _inference.runOnProcessedInput(input);
 
-        if (changed) {
-          _detectionNotifier.value = results;
+      debugPrint('📸 [Camera Frame] Width: ${frame.width}, Height: ${frame.height}, SensorOrientation: ${_camera.controller?.description.sensorOrientation}');
+      debugPrint('📸 [Inference] Detections count: ${results.length}');
+      if (results.isNotEmpty) {
+        debugPrint('📸   First detection: ${results.first.label} (${results.first.confidencePercent}%) at ${results.first.bbox}');
+      }
+
+      if (_isStreaming && mounted) {
+        final prevResults = _detectionNotifier.value;
+        _detectionNotifier.value = results;
+
+        final bool statusChanged = results.length != prevResults.length ||
+            (results.isNotEmpty &&
+                (prevResults.isEmpty ||
+                    results.first.label != prevResults.first.label ||
+                    (results.first.confidencePercent - prevResults.first.confidencePercent).abs() > 5));
+
+        if (statusChanged || results.isEmpty) {
           _statusTextNotifier.value = results.isEmpty
               ? 'NO MOLD DETECTED ✓'
               : '⚠ ${results.first.label.replaceAll('_', ' ').toUpperCase()} '
                   '– ${results.first.confidencePercent}%';
-        } else if (results.isEmpty && _detectionNotifier.value.isNotEmpty) {
-          _detectionNotifier.value = [];
-          _statusTextNotifier.value = 'NO MOLD DETECTED ✓';
         }
       }
     } catch (e) {
@@ -1020,40 +1016,3 @@ class _ViewfinderPainter extends CustomPainter {
   bool shouldRepaint(_ViewfinderPainter old) => old.active != active;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// YUV → RGB (downsampled, background isolate)
-// ─────────────────────────────────────────────────────────────────────────────
-
-Uint8List _yuv420ToRgbDownsampled(Map<String, dynamic> args) {
-  final int width = args['width'];
-  final int height = args['height'];
-  final int target = args['targetSize'];
-  final Uint8List yPlane = args['yPlane'];
-  final Uint8List uPlane = args['uPlane'];
-  final Uint8List vPlane = args['vPlane'];
-  final int uvRowStride = args['uvRowStride'];
-  final int uvPixelStride = args['uvPixelStride'];
-
-  final rgb = Uint8List(target * target * 3);
-  int idx = 0;
-  final xStep = width / target;
-  final yStep = height / target;
-
-  for (int ty = 0; ty < target; ty++) {
-    final int srcY = (ty * yStep).floor().clamp(0, height - 1);
-    for (int tx = 0; tx < target; tx++) {
-      final int srcX = (tx * xStep).floor().clamp(0, width - 1);
-      final int yVal = yPlane[srcY * width + srcX] & 0xFF;
-      final int uvIndex =
-          uvPixelStride * (srcX ~/ 2) + uvRowStride * (srcY ~/ 2);
-      final int uVal = (uPlane[uvIndex] & 0xFF) - 128;
-      final int vVal = (vPlane[uvIndex] & 0xFF) - 128;
-
-      rgb[idx++] = (yVal + 1.402 * vVal).round().clamp(0, 255);
-      rgb[idx++] =
-          (yVal - 0.344136 * uVal - 0.714136 * vVal).round().clamp(0, 255);
-      rgb[idx++] = (yVal + 1.772 * uVal).round().clamp(0, 255);
-    }
-  }
-  return rgb;
-}

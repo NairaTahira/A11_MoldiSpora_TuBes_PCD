@@ -27,6 +27,22 @@ class MongoService {
     }
   }
 
+  static Future<List<Map<String, dynamic>>> fetchAllResults() async {
+    if (!_isConnected || _db == null || !_db!.isConnected) {
+      await connect();
+    }
+    if (!_isConnected || _collection == null) return [];
+
+    try {
+      final docs = await _collection!.find().toList();
+      debugPrint('✅ Fetched ${docs.length} results from MongoDB');
+      return docs;
+    } catch (e) {
+      debugPrint('❌ MongoDB fetch failed: $e');
+      return [];
+    }
+  }
+
   static Future<void> uploadResult(DetectionResult result) async {
     // reconnect if dropped
     if (!_isConnected || _db == null || !_db!.isConnected) {
