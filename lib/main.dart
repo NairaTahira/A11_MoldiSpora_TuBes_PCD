@@ -27,10 +27,14 @@ void main() async {
   await Hive.initFlutter();
   Hive.registerAdapter(DetectionResultAdapter());
 
+  const boxName = 'scan_history';
   try {
-    await Hive.deleteBoxFromDisk('scan_history');
-  } catch (_) {}
-  await Hive.openBox<DetectionResult>('scan_history');
+    await Hive.openBox<DetectionResult>(boxName);
+  } catch (e) {
+    debugPrint('⚠️ Corrupted Hive box "$boxName", recreating: $e');
+    await Hive.deleteBoxFromDisk(boxName);
+    await Hive.openBox<DetectionResult>(boxName);
+  }
 
   locator.registerSingleton<HiveService>(HiveService());
   locator.registerSingleton<InferenceService>(InferenceService());

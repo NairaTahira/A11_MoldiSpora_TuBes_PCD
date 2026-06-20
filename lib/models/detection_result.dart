@@ -62,7 +62,7 @@ class DetectionResultAdapter extends TypeAdapter<DetectionResult> {
       imagePath: reader.read() as String?,
       location: reader.readString(),
       riskLevel: reader.readString(),
-      synced: reader.readBool(),
+      synced: reader.availableBytes > 0 ? reader.readBool() : false,
     );
   }
 

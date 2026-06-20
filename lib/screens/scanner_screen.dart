@@ -297,15 +297,13 @@ class _ScannerScreenState extends State<ScannerScreen>
         'uvPixelStride': frame.planes[1].bytesPerPixel ?? 1,
       });
 
-      final rawImage = img.Image.fromBytes(
+      final image = img.Image.fromBytes(
         width: 640,
         height: 640,
         bytes: rgbBytes.buffer,
         format: img.Format.uint8,
         numChannels: 3,
       );
-
-      final image = img.copyRotate(rawImage, angle: 90);
 
       final results = await _inference.runOnImage(
         image,
