@@ -6,6 +6,7 @@ class CameraService {
   List<CameraDescription> _cameras = [];
   bool _isInitialized = false;
   FlashMode _flashMode = FlashMode.off;
+  bool _isReinitializing = false; 
 
   CameraController? get controller => _controller;
   bool get isInitialized => _isInitialized;
@@ -29,10 +30,18 @@ class CameraService {
     }
   }
 
-  /// Dispose old controller then re-create. Call when screen comes back into view.
   Future<void> reinit() async {
-    await _disposeController();
-    await init();
+    if (_isReinitializing) {
+      debugPrint('⚠️ reinit() already in progress, skipping duplicate call');
+      return;
+    }
+    _isReinitializing = true;
+    try {
+      await _disposeController();
+      await init();
+    } finally {
+      _isReinitializing = false;
+    }
   }
 
   Future<void> _initController(CameraDescription camera) async {

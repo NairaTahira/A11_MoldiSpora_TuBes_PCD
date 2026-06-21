@@ -204,6 +204,10 @@ class _ScannerScreenState extends State<ScannerScreen>
               backgroundColor: Color(0xFFFF4444),
             ),
           );
+          // Only clear on actual failure
+          setState(() {
+            _galleryImage = null;
+          });
         }
         return;
       }
@@ -214,13 +218,11 @@ class _ScannerScreenState extends State<ScannerScreen>
         pcdSettings: _pcdSettingsNotifier.value,
       );
 
-      // FIX: guard mounted before touching state/context
       if (!mounted) return;
 
       _detectionNotifier.value = results;
 
       if (results.isEmpty) {
-        // FIX: was previously trying to show alert even with empty results
         _statusTextNotifier.value = 'NO MOLD DETECTED ✓';
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -229,25 +231,23 @@ class _ScannerScreenState extends State<ScannerScreen>
             duration: Duration(seconds: 2),
           ),
         );
+        // No mold found — safe to drop back to camera automatically
+        setState(() {
+          _galleryImage = null;
+        });
+        await _camera.reinit();
+        if (mounted) setState(() => _flashMode = _camera.flashMode);
       } else {
         _statusTextNotifier.value =
             '⚠ ${results.first.label.replaceAll('_', ' ').toUpperCase()} '
             '– ${results.first.confidencePercent}%';
-
-        // Only save & show alert when mold IS detected
-        for (final r in results) {
-          await _hive.saveResult(DetectionResult(
-            id: const Uuid().v4(),
-            timestamp: DateTime.now(),
-            confidence: r.confidence,
-            label: r.label,
+        if (mounted) {
+          _showSavedAlert(
+            results.first,
+            allResults: results,
             imagePath: picked.path,
-            location: 'Kamar Kos',
-            riskLevel: r.riskLevel,
-          ));
+          );
         }
-        await _hive.syncPendingResults();
-        if (mounted) _showSavedAlert(results.first);
       }
     } catch (e, stack) {
       debugPrint('Gallery scan error: $e\n$stack');
@@ -260,15 +260,16 @@ class _ScannerScreenState extends State<ScannerScreen>
             backgroundColor: const Color(0xFFFF4444),
           ),
         );
-      }
-    } finally {
-      if (mounted) {
+        // Only clear on actual error
         setState(() {
-          _isProcessing = false;
           _galleryImage = null;
         });
         await _camera.reinit();
         if (mounted) setState(() => _flashMode = _camera.flashMode);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
       }
     }
   }
@@ -351,79 +352,150 @@ class _ScannerScreenState extends State<ScannerScreen>
     try {
       _stopStream();
       final file = await _camera.captureImage();
-      for (final r in moldResults) {
-        await _hive.saveResult(DetectionResult(
-          id: const Uuid().v4(),
-          timestamp: DateTime.now(),
-          confidence: r.confidence,
-          label: r.label,
+      if (mounted) {
+        _showSavedAlert(
+          moldResults.first,
+          allResults: moldResults,
           imagePath: file?.path,
-          location: 'Kamar Kos',
-          riskLevel: r.riskLevel,
-        ));
+          cameFromLiveCapture: true,
+        );
       }
-      await _hive.syncPendingResults();
-      if (mounted) _showSavedAlert(moldResults.first);
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
-  void _showSavedAlert(InferenceResult r) {
+  void _showSavedAlert(
+    InferenceResult r, {
+    required List<InferenceResult> allResults,
+    String? imagePath,
+    bool cameFromLiveCapture = false,
+  }) {
+    bool isSavingToHistory = false;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF161B22),
+      isDismissible: false,
+      enableDrag: false,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: const Color(0xFFFF4444).withOpacity(0.15),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.warning_amber_rounded,
-                  color: Color(0xFFFF4444), size: 28),
-            ),
-            const SizedBox(height: 12),
-            const Text('Mold Saved to History!',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            Text(
-              'Confidence: ${r.confidencePercent}%\n'
-              'Risk: ${r.riskLevel.toUpperCase()}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Color(0xFF8B949E), fontSize: 14),
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF00C896),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF4444).withOpacity(0.15),
+                  shape: BoxShape.circle,
                 ),
-                child: const Text('Got it',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
+                child: const Icon(Icons.warning_amber_rounded,
+                    color: Color(0xFFFF4444), size: 28),
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              const Text('Mold Detected!',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Text(
+                'Confidence: ${r.confidencePercent}%\n'
+                'Risk: ${r.riskLevel.toUpperCase()}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF8B949E), fontSize: 14),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: isSavingToHistory
+                      ? null
+                      : () async {
+                          setSheetState(() => isSavingToHistory = true);
+                          try {
+                            for (final res in allResults) {
+                              await _hive.saveResult(DetectionResult(
+                                id: const Uuid().v4(),
+                                timestamp: DateTime.now(),
+                                confidence: res.confidence,
+                                label: res.label,
+                                imagePath: imagePath,
+                                location: 'Kamar Kos',
+                                riskLevel: res.riskLevel,
+                              ));
+                            }
+                            await _hive.syncPendingResults();
+                          } finally {
+                            if (sheetContext.mounted) {
+                              Navigator.pop(sheetContext);
+                            }
+                            await _resetToLiveCamera(
+                              skipReinit: cameFromLiveCapture,
+                            );
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00C896),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: isSavingToHistory
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2),
+                        )
+                      : const Text('Save to History',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: isSavingToHistory
+                      ? null
+                      : () async {
+                          Navigator.pop(sheetContext);
+                          await _resetToLiveCamera();
+                        },
+                  child: const Text('Discard',
+                      style: TextStyle(color: Color(0xFF8B949E))),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  Future<void> _resetToLiveCamera({bool skipReinit = false}) async {
+    if (!mounted) return;
+    setState(() {
+      _galleryImage = null;
+      _detectionNotifier.value = [];
+      _statusTextNotifier.value = 'TAP ▶ TO START LIVE DETECTION';
+    });
+    if (!skipReinit) {
+      await _camera.reinit();
+      if (mounted) setState(() => _flashMode = _camera.flashMode);
+    } else {
+      // Live capture path: takePicture() already triggers CameraX's own
+      // session reset/reopen. Calling reinit() here would race against
+      // that in-flight reset and dispose a controller CameraX is still
+      // using — causing "CameraController used after being disposed".
+      if (mounted) setState(() => _flashMode = _camera.flashMode);
+    }
   }
 
   void _showPcdSettings() {
@@ -572,12 +644,7 @@ class _ScannerScreenState extends State<ScannerScreen>
                     // Back to camera (gallery mode only)
                     if (_galleryImage != null)
                       GestureDetector(
-                        onTap: () => setState(() {
-                          _galleryImage = null;
-                          _detectionNotifier.value = [];
-                          _statusTextNotifier.value =
-                              'TAP ▶ TO START LIVE DETECTION';
-                        }),
+                        onTap: _resetToLiveCamera,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 12, vertical: 6),
